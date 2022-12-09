@@ -42,6 +42,7 @@ io.on("connection", (socket: socketIO.Socket) => {
                 // Join the new room, it's made into an array, sorted and then joined
                 // So both parties join the same room
                 socket.join([data.userID, data.connectToID].sort().join(""))
+                socket.join(data.userID)
             })
         }
         catch (err) {
@@ -87,7 +88,5 @@ io.on("connection", (socket: socketIO.Socket) => {
         catch (err) {
             return; // TODO: Maybe send an error to the user
         }
-
-
     })
 })
