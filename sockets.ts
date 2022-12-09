@@ -12,81 +12,82 @@ const sessionStore = mongoStore.create({
 })
 
 io.on("connection", (socket: socketIO.Socket) => {
+    const parsedAuthData = z.object({
+        username: z.string().min(3).max(16),
+        sessionID: z.string()
+    }).required().safeParse(socket.handshake.auth)
+
+    if (!parsedAuthData.success) {
+        socket.emit("error", "missing-parameters")
+        return socket.disconnect()
+    }
+
+    try {
+        sessionStore.get(parsedAuthData.data.sessionID, (err: Error | undefined, session: Session | null) => {
+            if (err) {
+                socket.emit("error", "server-error")
+                return socket.disconnect()
+            }
+
+            if (session == null) {
+                socket.emit("error", "invalid-session")
+                return socket.disconnect()
+            }
+
+            if (Date.now() > new Date(session.cookie.expires).getTime()) {
+                socket.emit("error", "expired-session")
+                return socket.disconnect()
+            }
+
+            if (session.passport.user !== parsedAuthData.data.username) {
+                socket.emit("error", "unauthorized")
+                return socket.disconnect()
+            }
+
+        })
+    } catch (err) {
+        return socket.emit("error", "server-error")
+    }
+
     socket.on("join private chat room", (rawPayload: unknown) => {
-        const payloadScheme = z.object({
-            auth: z.object({
-                username: z.string().min(3).max(16),
-                sessionID: z.string()
-            }),
-            data: z.object({
-                userID: z.string().length(32),
-                connectToID: z.string().length(32)
-            })
-        }).required()
+        const parsedPayload = z.object({
+            userID: z.string().length(32),
+            connectToID: z.string().length(32)
+        }).required().safeParse(rawPayload)
 
-        const parsedPayload = payloadScheme.safeParse(rawPayload)
-        if (!parsedPayload.success) return; // TODO: Maybe send an error to the user
-        const { data, auth } = parsedPayload.data;
+        if (!parsedPayload.success) return socket.emit("error", "invalid-parameters")
 
-        try {
-            sessionStore.get(auth.sessionID, (err: Error | undefined, session: Session | null) => {
-                if (err || !session) return;
-                if (session.passport.user !== auth.username) return;
-
-                // Leave all current rooms the user is in
-                const userRooms = Array.from(socket.rooms)
-                for (let i = 0; i < userRooms.length; i++) {
-                    socket.leave(userRooms[i])
-                }
-
-                // Join the new room, it's made into an array, sorted and then joined
-                // So both parties join the same room
-                socket.join([data.userID, data.connectToID].sort().join(""))
-                socket.join(data.userID)
-            })
+        // Leave all current rooms the user is in
+        const userRooms = Array.from(socket.rooms)
+        for (let i = 0; i < userRooms.length; i++) {
+            socket.leave(userRooms[i])
         }
-        catch (err) {
-            return; // TODO: Maybe send an error to the user
-        }
+
+        // Join the new room, it's made into an array, sorted and then joined
+        // So both parties join the same room
+        socket.join([parsedPayload.data.userID, parsedPayload.data.connectToID].sort().join(""))
+        socket.join(parsedPayload.data.userID)
     })
 
     socket.on("private message", (rawPayload: unknown) => {
-        const payloadScheme = z.object({
-            auth: z.object({
-                username: z.string().min(3).max(16),
-                sessionID: z.string()
-            }),
-            data: z.object({
-                author: z.string().min(3).max(16),
+        const parsedPayload = z.object({
+            author: z.string().min(3).max(16),
 
-                userID: z.string().length(32),
-                sendToID: z.string().length(32),
+            userID: z.string().length(32),
+            sendToID: z.string().length(32),
 
-                messageID: z.string().length(16),
+            messageID: z.string().length(16),
 
-                // attachments: z.array(z.string()),
-                // embeds:  z.array(z.string()),
-                // mentions: z.array(z.string()),
-                content: z.string().min(1).max(2000),
+            // attachments: z.array(z.string()),
+            // embeds:  z.array(z.string()),
+            // mentions: z.array(z.string()),
+            content: z.string().min(1).max(2000),
 
-                createdAt: z.number(),
-            })
-        })
+            createdAt: z.number(),
+        }).required().safeParse(rawPayload)
 
-        const parsedPayload = payloadScheme.safeParse(rawPayload)
-        if (!parsedPayload.success) return;
-        const { data, auth } = parsedPayload.data;
+        if (!parsedPayload.success) return socket.emit("error", "invalid-parameters")
 
-        try {
-            sessionStore.get(auth.sessionID, (err: Error | undefined, session: Session | null) => {
-                if (err || !session) return;
-                if (session.passport.user !== auth.username) return;
-
-                socket.to([data.userID, data.sendToID].sort().join("")).emit("private message", data)
-            })
-        }
-        catch (err) {
-            return; // TODO: Maybe send an error to the user
-        }
+        socket.to([parsedPayload.data.userID, parsedPayload.data.sendToID].sort().join("")).emit("private message", parsedPayload.data)
     })
 })
