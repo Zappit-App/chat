@@ -1,15 +1,10 @@
-import mongoStore from 'connect-mongo';
 import socketIO from 'socket.io';
 import { z } from "zod"
 
-import type { Session } from "./types"
+import PrivateMessages from "../models/privateMessage"
 
-import { io } from '.';
-
-// Declare the store to be used to authenticate data
-const sessionStore = mongoStore.create({
-    mongoUrl: process.env.MONGODB_URI as string,
-})
+import { io } from '..';
+import { sessionStore } from "./databases"
 
 io.on("connection", (socket: socketIO.Socket) => {
     const parsedAuthData = z.object({
@@ -23,7 +18,7 @@ io.on("connection", (socket: socketIO.Socket) => {
     }
 
     try {
-        sessionStore.get(parsedAuthData.data.sessionID, (err: Error | undefined, session: Session | null) => {
+        sessionStore.get(parsedAuthData.data.sessionID, (err, session) => {
             if (err) {
                 socket.emit("error", "server-error")
                 return socket.disconnect()
@@ -73,14 +68,16 @@ io.on("connection", (socket: socketIO.Socket) => {
         const parsedPayload = z.object({
             author: z.string().min(3).max(16),
 
-            userID: z.string().length(32),
-            sendToID: z.string().length(32),
+            authorID: z.string().length(32),
+            recipientID: z.string().length(32),
 
-            messageID: z.string().length(16),
+            messageID: z.string().length(81).refine((messageID: string) => {
+                const messageIDArray = messageID.split("_")
+                if (messageIDArray[0].length !== 64) return false;
+                if (messageIDArray[1].length !== 16) return false;
+                return true
+            }),
 
-            // attachments: z.array(z.string()),
-            // embeds:  z.array(z.string()),
-            // mentions: z.array(z.string()),
             content: z.string().min(1).max(2000),
 
             createdAt: z.number(),
@@ -88,6 +85,13 @@ io.on("connection", (socket: socketIO.Socket) => {
 
         if (!parsedPayload.success) return socket.emit("error", "invalid-parameters")
 
-        socket.to([parsedPayload.data.userID, parsedPayload.data.sendToID].sort().join("")).emit("private message", parsedPayload.data)
+        socket.to([parsedPayload.data.authorID, parsedPayload.data.recipientID].sort().join("")).emit("private message", parsedPayload.data)
+
+        // Store the message
+        const privateMessage = new PrivateMessages({
+            ...parsedPayload.data,
+            chatID: [parsedPayload.data.authorID, parsedPayload.data.recipientID].sort().join("")
+        })
+        privateMessage.save()
     })
 })
